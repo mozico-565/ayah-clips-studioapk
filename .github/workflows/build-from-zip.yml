@@ -13,21 +13,17 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Unpack project ZIP
+      - name: Extract project
         shell: bash
         run: |
           set -euo pipefail
-
-          test -f Ayah-Clips-Android-Source.zip
-
           mkdir -p "$RUNNER_TEMP/ayah-source"
 
           python3 - <<'PY'
@@ -45,21 +41,15 @@ jobs:
               z.extractall(dest)
           PY
 
-          if [ -f "$RUNNER_TEMP/ayah-source/package.json" ]; then
-            PROJECT_DIR="$RUNNER_TEMP/ayah-source"
-          else
-            PACKAGE=$(find "$RUNNER_TEMP/ayah-source" \
-              -name package.json \
-              -not -path '*/node_modules/*' \
-              -print -quit)
+          PACKAGE=$(find "$RUNNER_TEMP/ayah-source" \
+            -name package.json \
+            -not -path '*/node_modules/*' \
+            -print -quit)
 
-            test -n "$PACKAGE"
-            PROJECT_DIR=$(dirname "$PACKAGE")
-          fi
+          test -n "$PACKAGE"
+          echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -75,36 +65,77 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify Android SDK
-        shell: bash
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-
       - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: bun install --no-save
+
+      - name: Fix Tailwind and Vite CSS
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          bun install --no-save
+          python3 - <<'PY'
+          from pathlib import Path
+
+          css = Path("src/styles.css")
+          if not css.exists():
+              raise SystemExit("Missing src/styles.css")
+
+          s = css.read_text()
+
+          s = s.replace(
+              '@import "tailwindcss" source(none);',
+              '@import "tailwindcss";'
+          )
+
+          s = s.replace(
+              '@source "../src";',
+              ''
+          )
+
+          s = s.replace(
+              '@import "tw-animate-css";',
+              ''
+          )
+
+          s = '@import "tw-animate-css";\n' + s
+          css.write_text(s)
+
+          config = Path("vite.mobile.config.ts")
+          if not config.exists():
+              raise SystemExit("Missing vite.mobile.config.ts")
+
+          s = config.read_text()
+
+          if "css:" not in s:
+              s = s.replace(
+                  "plugins:[react()],",
+                  'plugins:[react()],css:{transformer:"postcss",minify:false},'
+              )
+
+          config.write_text(s)
+
+          print("Applied CSS build compatibility fixes")
+          PY
 
       - name: Build mobile frontend
         working-directory: ${{ env.PROJECT_DIR }}
+        run: bun run build:mobile
+
+      - name: Setup Android SDK
         shell: bash
         run: |
-          bun run build:mobile
+          test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
 
-      - name: Initialize Capacitor Android
+      - name: Initialize Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           if [ ! -d android ]; then
             bunx cap add android
           fi
-
           bunx cap sync android
 
-      - name: Build debug APK
+      - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
@@ -114,6 +145,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ayah-Clips-debug-APK
+          name: Ayah-Clips-APK
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
