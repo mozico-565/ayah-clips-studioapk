@@ -61,11 +61,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Java
+            - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Verify Android SDK
         shell: bash
