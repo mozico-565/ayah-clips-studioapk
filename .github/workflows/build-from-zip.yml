@@ -1,5 +1,5 @@
 
-name: Build Ayah Clips from ZIP
+name: Build Ayah Clips APK from ZIP
 
 on:
   workflow_dispatch:
@@ -13,17 +13,19 @@ permissions:
 
 jobs:
   build-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -euo pipefail
+          test -f Ayah-Clips-Android-Source.zip
           mkdir -p "$RUNNER_TEMP/ayah-source"
 
           python3 - <<'PY'
@@ -35,8 +37,8 @@ jobs:
 
           with ZipFile("Ayah-Clips-Android-Source.zip") as z:
               for item in z.infolist():
-                  p = Path(item.filename)
-                  if p.is_absolute() or ".." in p.parts:
+                  path = Path(item.filename)
+                  if path.is_absolute() or ".." in path.parts:
                       raise SystemExit("Unsafe ZIP path")
               z.extractall(dest)
           PY
@@ -49,7 +51,7 @@ jobs:
           test -n "$PACKAGE"
           echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -65,11 +67,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        run: bun install --no-save
+        shell: bash
+        run: |
+          bun install --no-save
 
-      - name: Fix Tailwind and Vite CSS
+      - name: Fix Tailwind CSS compatibility
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -81,78 +90,74 @@ jobs:
               raise SystemExit("Missing src/styles.css")
 
           s = css.read_text()
-
           s = s.replace(
               '@import "tailwindcss" source(none);',
               '@import "tailwindcss";'
           )
-
-          s = s.replace(
-              '@source "../src";',
-              ''
-          )
-
-          s = s.replace(
-              '@import "tw-animate-css";',
-              ''
-          )
-
+          s = s.replace('@source "../src";', '')
+          s = s.replace('@import "tw-animate-css";', '')
           s = '@import "tw-animate-css";\n' + s
           css.write_text(s)
 
           config = Path("vite.mobile.config.ts")
           if not config.exists():
-              raise SystemExit("Missing vite.mobile.config.ts")
+              raise SystemExit("Missing Vite mobile config")
 
           s = config.read_text()
-
           if "css:" not in s:
               s = s.replace(
                   "plugins:[react()],",
                   'plugins:[react()],css:{transformer:"postcss",minify:false},'
               )
-
           config.write_text(s)
-
-          print("Applied CSS build compatibility fixes")
           PY
 
-            - name: Build mobile frontend
+      - name: Build mobile frontend
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+          set -euo pipefail
           bun run build:mobile
 
-          test -f dist-mobile/mobile.html
-
-          mv dist-mobile/mobile.html dist-mobile/index.html
+          if [ -f dist-mobile/mobile.html ]; then
+            mv dist-mobile/mobile.html dist-mobile/index.html
+          fi
 
           test -f dist-mobile/index.html
 
-      - name: Setup Android SDK
-        shell: bash
-        run: |
-          test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "Mobile frontend built successfully"
 
-      - name: Initialize Capacitor
+      - name: Initialize Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ ! -d android ]; then
             bunx cap add android
           fi
+
           bunx cap sync android
 
-      - name: Build APK
+      - name: Build Android debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
+          set -euo pipefail
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Verify APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Ayah-Clips-APK
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
