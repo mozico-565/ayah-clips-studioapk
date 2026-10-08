@@ -70,6 +70,7 @@ jobs:
       - name: Verify Android SDK
         shell: bash
         run: |
+          set -euo pipefail
           test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           java -version
 
@@ -79,38 +80,56 @@ jobs:
         run: |
           bun install --no-save
 
-      - name: Fix Tailwind CSS compatibility
+      - name: Restore Lovable original styling
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           css = Path("src/styles.css")
-          if not css.exists():
-              raise SystemExit("Missing src/styles.css")
+          config = Path("vite.mobile.config.ts")
+
+          if not css.exists() or not config.exists():
+              raise SystemExit("Missing CSS or Vite config")
 
           s = css.read_text()
-          s = s.replace(
-              '@import "tailwindcss" source(none);',
-              '@import "tailwindcss";'
+
+          s = re.sub(
+              r'@import\s+"tailwindcss"(?:\s+source\(none\))?;',
+              '',
+              s
           )
-          s = s.replace('@source "../src";', '')
+
           s = s.replace('@import "tw-animate-css";', '')
-          s = '@import "tw-animate-css";\n' + s
-          css.write_text(s)
+          s = re.sub(r'@source\s+"[^"]+";', '', s)
 
-          config = Path("vite.mobile.config.ts")
-          if not config.exists():
-              raise SystemExit("Missing Vite mobile config")
+          css.write_text(
+              '@import "tailwindcss";\n'
+              '@import "tw-animate-css";\n'
+              + s.lstrip()
+          )
 
-          s = config.read_text()
-          if "css:" not in s:
-              s = s.replace(
-                  "plugins:[react()],",
-                  'plugins:[react()],css:{transformer:"postcss",minify:false},'
-              )
-          config.write_text(s)
+          v = config.read_text()
+
+          if '@tailwindcss/vite' not in v:
+              v = 'import tailwindcss from "@tailwindcss/vite";\n' + v
+
+          v, count = re.subn(
+              r'plugins\s*:\s*\[\s*react\(\)\s*\]',
+              'plugins: [react(), tailwindcss()]',
+              v,
+              count=1
+          )
+
+          if count != 1:
+              raise SystemExit("Cannot locate Vite plugins")
+
+          config.write_text(v)
+
+          print("Lovable styling restored")
           PY
 
       - name: Build mobile frontend
@@ -126,7 +145,9 @@ jobs:
           fi
 
           test -s dist-mobile/index.html
-          echo "Mobile frontend ready"
+
+          echo "Checking generated assets..."
+          find dist-mobile -maxdepth 2 -type f | head -30
 
       - name: Initialize Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
@@ -156,6 +177,7 @@ jobs:
           set -euo pipefail
 
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
           test -s "$APK"
           ls -lh "$APK"
 
