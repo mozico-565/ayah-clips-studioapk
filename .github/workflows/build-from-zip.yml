@@ -1,0 +1,87 @@
+name: Build Ayah Clips from ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Ayah-Clips-Android-Source.zip'
+      - '.github/workflows/build-from-zip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Unpack uploaded project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Ayah-Clips-Android-Source.zip || { echo 'Upload Ayah-Clips-Android-Source.zip to the repository root'; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ayah-source"
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          dest = Path(__import__('os').environ['RUNNER_TEMP']) / 'ayah-source'
+          with ZipFile('Ayah-Clips-Android-Source.zip') as z:
+              for item in z.infolist():
+                  p = Path(item.filename)
+                  if p.is_absolute() or '..' in p.parts:
+                      raise SystemExit('Unsafe ZIP path: ' + item.filename)
+              z.extractall(dest)
+          PY
+          if [ -f "$RUNNER_TEMP/ayah-source/package.json" ]; then
+            echo "PROJECT_DIR=$RUNNER_TEMP/ayah-source" >> "$GITHUB_ENV"
+          else
+            candidate=$(find "$RUNNER_TEMP/ayah-source" -mindepth 2 -maxdepth 3 -name package.json -print -quit)
+            test -n "$candidate" || { echo 'package.json not found inside ZIP'; exit 1; }
+            echo "PROJECT_DIR=$(dirname "$candidate")" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Build mobile frontend
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run build:mobile
+
+      - name: Initialize or sync Capacitor Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ayah-Clips-debug-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          
