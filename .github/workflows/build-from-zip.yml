@@ -48,7 +48,11 @@ jobs:
           if [ -f "$RUNNER_TEMP/ayah-source/package.json" ]; then
             PROJECT_DIR="$RUNNER_TEMP/ayah-source"
           else
-            PACKAGE=$(find "$RUNNER_TEMP/ayah-source" -name package.json -not -path '*/node_modules/*' -print -quit)
+            PACKAGE=$(find "$RUNNER_TEMP/ayah-source" \
+              -name package.json \
+              -not -path '*/node_modules/*' \
+              -print -quit)
+
             test -n "$PACKAGE"
             PROJECT_DIR=$(dirname "$PACKAGE")
           fi
@@ -59,6 +63,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -75,20 +84,25 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install --no-audit --no-fund
+        shell: bash
+        run: |
+          bun install --no-save
 
       - name: Build mobile frontend
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm run build:mobile
+        shell: bash
+        run: |
+          bun run build:mobile
 
       - name: Initialize Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           if [ ! -d android ]; then
-            npx cap add android
+            bunx cap add android
           fi
-          npx cap sync android
+
+          bunx cap sync android
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
