@@ -117,9 +117,17 @@ jobs:
           print("Applied CSS build compatibility fixes")
           PY
 
-      - name: Build mobile frontend
+            - name: Build mobile frontend
         working-directory: ${{ env.PROJECT_DIR }}
-        run: bun run build:mobile
+        shell: bash
+        run: |
+          bun run build:mobile
+
+          test -f dist-mobile/mobile.html
+
+          mv dist-mobile/mobile.html dist-mobile/index.html
+
+          test -f dist-mobile/index.html
 
       - name: Setup Android SDK
         shell: bash
